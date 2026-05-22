@@ -16,14 +16,11 @@ interface AudioPlayerProps {
   isPlaying: boolean;
   onPlayPause: () => void;
   onNext: () => void;
-  onPrev: () => void;
   onParagraphChange: (idx: number) => void;
   speed: number;
   onSpeedChange: (s: number) => void;
   fontSize: number;
   onFontSizeChange: (s: number) => void;
-  canPrev: boolean;
-  canNext: boolean;
 }
 
 export default function AudioPlayer({
@@ -32,14 +29,11 @@ export default function AudioPlayer({
   isPlaying,
   onPlayPause,
   onNext,
-  onPrev,
   onParagraphChange,
   speed,
   onSpeedChange,
   fontSize,
   onFontSizeChange,
-  canPrev,
-  canNext,
 }: AudioPlayerProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [voices, setVoices] = useState<YaVoice[]>([]);
@@ -169,6 +163,14 @@ export default function AudioPlayer({
     }
   }, [selectedVoice, speed]);
 
+  const jumpParagraph = useCallback((delta: number) => {
+    const next = Math.max(0, Math.min(paragraphs.length - 1, paraIdxRef.current + delta));
+    stopAudio();
+    paraIdxRef.current = next;
+    onParagraphChange(next);
+    if (isPlayingRef.current) setTimeout(() => playFrom(next), 50);
+  }, [paragraphs.length, stopAudio, playFrom, onParagraphChange]);
+
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
   return (
@@ -240,8 +242,8 @@ export default function AudioPlayer({
 
       <div className="flex items-center gap-3">
         <button
-          onClick={onPrev}
-          disabled={!canPrev}
+          onClick={() => jumpParagraph(-1)}
+          disabled={paraIdxRef.current === 0}
           className="w-10 h-10 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <Icon name="SkipBack" size={18} />
@@ -258,8 +260,8 @@ export default function AudioPlayer({
         </button>
 
         <button
-          onClick={onNext}
-          disabled={!canNext}
+          onClick={() => jumpParagraph(1)}
+          disabled={paraIdxRef.current >= paragraphs.length - 1}
           className="w-10 h-10 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <Icon name="SkipForward" size={18} />

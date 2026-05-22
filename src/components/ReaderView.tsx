@@ -236,14 +236,11 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
             isPlaying={isPlaying}
             onPlayPause={() => setIsPlaying(p => !p)}
             onNext={handleNext}
-            onPrev={handlePrev}
             onParagraphChange={setParagraphIdx}
             speed={speed}
             onSpeedChange={setSpeed}
             fontSize={fontSize}
             onFontSizeChange={setFontSize}
-            canPrev={chapterIdx > 0}
-            canNext={chapterIdx < book.chapters.length - 1}
           />
         </div>
       </div>
