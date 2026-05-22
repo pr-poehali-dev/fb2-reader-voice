@@ -11,6 +11,7 @@ export interface ReadingProgress {
   bookTitle: string;
   chapterIdx: number;
   paragraphIdx: number;
+  wasPlaying: boolean;
   savedAt: number;
 }
 

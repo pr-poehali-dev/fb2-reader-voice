@@ -3,7 +3,6 @@ import Icon from '@/components/ui/icon';
 import { Slider } from '@/components/ui/slider';
 
 const SPEECHKIT_URL = 'https://functions.poehali.dev/8ae4c3c1-2ea4-4502-958f-5ea19e5ace2c';
-const MAX_CHUNK = 1000;
 
 interface YaVoice {
   id: string;
@@ -12,11 +11,13 @@ interface YaVoice {
 }
 
 interface AudioPlayerProps {
-  text: string;
+  paragraphs: string[];
+  startParagraphIdx?: number;
   isPlaying: boolean;
   onPlayPause: () => void;
   onNext: () => void;
   onPrev: () => void;
+  onParagraphChange: (idx: number) => void;
   speed: number;
   onSpeedChange: (s: number) => void;
   fontSize: number;
@@ -25,28 +26,14 @@ interface AudioPlayerProps {
   canNext: boolean;
 }
 
-function splitTextToChunks(text: string, maxLen: number): string[] {
-  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
-  const chunks: string[] = [];
-  let current = '';
-  for (const s of sentences) {
-    if ((current + s).length > maxLen && current) {
-      chunks.push(current.trim());
-      current = s;
-    } else {
-      current += s;
-    }
-  }
-  if (current.trim()) chunks.push(current.trim());
-  return chunks;
-}
-
 export default function AudioPlayer({
-  text,
+  paragraphs,
+  startParagraphIdx = 0,
   isPlaying,
   onPlayPause,
   onNext,
   onPrev,
+  onParagraphChange,
   speed,
   onSpeedChange,
   fontSize,
@@ -60,13 +47,17 @@ export default function AudioPlayer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const chunksRef = useRef<string[]>([]);
-  const chunkIdxRef = useRef(0);
+  const paraIdxRef = useRef(startParagraphIdx);
   const abortRef = useRef<AbortController | null>(null);
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
+  const paragraphsRef = useRef(paragraphs);
+  paragraphsRef.current = paragraphs;
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+  const voiceRef = useRef(selectedVoice);
+  voiceRef.current = selectedVoice;
 
-  // Load voices once
   useEffect(() => {
     fetch(SPEECHKIT_URL)
       .then(r => r.json())
@@ -82,30 +73,42 @@ export default function AudioPlayer({
       audioRef.current.src = '';
       audioRef.current = null;
     }
-    chunkIdxRef.current = 0;
     setLoading(false);
   }, []);
 
-  const playChunk = useCallback(async (chunkIdx: number) => {
-    const chunks = chunksRef.current;
-    if (chunkIdx >= chunks.length) {
+  const playFrom = useCallback(async (pIdx: number) => {
+    const paras = paragraphsRef.current;
+    if (pIdx >= paras.length) {
       setLoading(false);
       onNext();
       return;
     }
     if (!isPlayingRef.current) return;
 
+    paraIdxRef.current = pIdx;
+    onParagraphChange(pIdx);
     setLoading(true);
     setError('');
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
+    const text = paras[pIdx].trim();
+    if (!text) {
+      setLoading(false);
+      if (isPlayingRef.current) playFrom(pIdx + 1);
+      return;
+    }
+
     try {
       const resp = await fetch(SPEECHKIT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: chunks[chunkIdx], voice: selectedVoice, speed }),
+        body: JSON.stringify({
+          text: text.slice(0, 4500),
+          voice: voiceRef.current,
+          speed: speedRef.current,
+        }),
         signal: ctrl.signal,
       });
 
@@ -118,47 +121,51 @@ export default function AudioPlayer({
       const blob = new Blob([bytes], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
 
-      if (!isPlayingRef.current) { URL.revokeObjectURL(url); return; }
+      if (!isPlayingRef.current) { URL.revokeObjectURL(url); setLoading(false); return; }
 
       const audio = new Audio(url);
       audioRef.current = audio;
       setLoading(false);
 
-      audio.playbackRate = 1;
       await audio.play();
 
       audio.onended = () => {
         URL.revokeObjectURL(url);
-        chunkIdxRef.current = chunkIdx + 1;
-        if (isPlayingRef.current) playChunk(chunkIdx + 1);
+        if (isPlayingRef.current) playFrom(pIdx + 1);
       };
     } catch (e: unknown) {
       if ((e as Error).name === 'AbortError') return;
       setError('Ошибка синтеза. Проверь ключ Yandex.');
       setLoading(false);
     }
-  }, [selectedVoice, speed, onNext]);
+  }, [onNext, onParagraphChange]);
 
-  // Start / stop based on isPlaying
+  // Start / stop on isPlaying toggle
   useEffect(() => {
     if (isPlaying) {
-      chunksRef.current = splitTextToChunks(text, MAX_CHUNK);
-      chunkIdxRef.current = 0;
       stopAudio();
-      setTimeout(() => playChunk(0), 50);
+      const startIdx = paraIdxRef.current;
+      setTimeout(() => playFrom(startIdx), 50);
     } else {
       stopAudio();
     }
     return () => { stopAudio(); };
-  }, [isPlaying, text]);
+  }, [isPlaying]);
+
+  // New chapter loaded — reset paragraph
+  useEffect(() => {
+    paraIdxRef.current = startParagraphIdx;
+    if (isPlaying) {
+      stopAudio();
+      setTimeout(() => playFrom(startParagraphIdx), 50);
+    }
+  }, [paragraphs, startParagraphIdx]);
 
   // Re-synthesize if voice/speed changed while playing
   useEffect(() => {
     if (isPlaying) {
       stopAudio();
-      chunksRef.current = splitTextToChunks(text, MAX_CHUNK);
-      chunkIdxRef.current = 0;
-      setTimeout(() => playChunk(0), 50);
+      setTimeout(() => playFrom(paraIdxRef.current), 50);
     }
   }, [selectedVoice, speed]);
 
@@ -166,13 +173,13 @@ export default function AudioPlayer({
 
   return (
     <div className="relative">
-      {/* Settings panel */}
       {showSettings && (
         <div className="absolute bottom-full left-0 right-0 mb-3 bg-card border border-border rounded-2xl p-5 animate-slide-up box-glow">
           <div className="space-y-5">
-            {/* Voice */}
             <div>
-              <label className="text-xs text-muted-foreground uppercase tracking-widest block mb-2">Голос (Yandex SpeechKit)</label>
+              <label className="text-xs text-muted-foreground uppercase tracking-widest block mb-2">
+                Голос (Yandex SpeechKit)
+              </label>
               <select
                 value={selectedVoice}
                 onChange={e => setSelectedVoice(e.target.value)}
@@ -184,7 +191,6 @@ export default function AudioPlayer({
               </select>
             </div>
 
-            {/* Speed */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs text-muted-foreground uppercase tracking-widest">Скорость</label>
@@ -207,7 +213,6 @@ export default function AudioPlayer({
               </div>
             </div>
 
-            {/* Font size */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs text-muted-foreground uppercase tracking-widest">Размер шрифта</label>
@@ -226,7 +231,6 @@ export default function AudioPlayer({
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="absolute bottom-full left-0 right-0 mb-2 flex items-center gap-2 text-red-400 text-xs">
           <Icon name="AlertCircle" size={12} />
@@ -234,7 +238,6 @@ export default function AudioPlayer({
         </div>
       )}
 
-      {/* Player bar */}
       <div className="flex items-center gap-3">
         <button
           onClick={onPrev}

@@ -12,33 +12,56 @@ interface ReaderViewProps {
 
 export default function ReaderView({ book, onUnload }: ReaderViewProps) {
   const [chapterIdx, setChapterIdx] = useState(0);
+  const [paragraphIdx, setParagraphIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [fontSize, setFontSize] = useState(18);
   const [showNav, setShowNav] = useState(false);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [bookmarkAdded, setBookmarkAdded] = useState(false);
+  const [restored, setRestored] = useState(false);
 
+  const paraRefs = useRef<(HTMLParagraphElement | null)[]>([]);
   const chapter = book.chapters[chapterIdx];
-  const chapterText = chapter?.paragraphs.join(' ') || '';
+  const paragraphs = chapter?.paragraphs || [];
 
-  // Restore progress
+  // Restore progress on mount
   useEffect(() => {
     const progress = loadProgress();
     if (progress?.bookTitle === book.title) {
       setChapterIdx(progress.chapterIdx);
+      setParagraphIdx(progress.paragraphIdx || 0);
+      if (progress.wasPlaying) {
+        // Small delay so component fully mounts before autoplay
+        setTimeout(() => setIsPlaying(true), 300);
+      }
     }
     setBookmarks(loadBookmarks());
+    setRestored(true);
   }, [book.title]);
 
-  // Save progress
+  // Save progress whenever chapter/paragraph changes (after restore)
   useEffect(() => {
-    saveProgress({ bookTitle: book.title, chapterIdx, paragraphIdx: 0, savedAt: Date.now() });
-  }, [chapterIdx, book.title]);
+    if (!restored) return;
+    saveProgress({
+      bookTitle: book.title,
+      chapterIdx,
+      paragraphIdx,
+      wasPlaying: isPlaying,
+      savedAt: Date.now(),
+    });
+  }, [chapterIdx, paragraphIdx, isPlaying, book.title, restored]);
+
+  // Auto-scroll to active paragraph
+  useEffect(() => {
+    const el = paraRefs.current[paragraphIdx];
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [paragraphIdx]);
 
   const handleNext = useCallback(() => {
     if (chapterIdx < book.chapters.length - 1) {
       setChapterIdx(i => i + 1);
+      setParagraphIdx(0);
     } else {
       setIsPlaying(false);
     }
@@ -47,25 +70,28 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
   const handlePrev = useCallback(() => {
     if (chapterIdx > 0) {
       setChapterIdx(i => i - 1);
+      setParagraphIdx(0);
     }
   }, [chapterIdx]);
 
   const handleSelectChapter = (idx: number) => {
     setChapterIdx(idx);
+    setParagraphIdx(0);
     setIsPlaying(false);
   };
 
-  const handleSelectBookmark = (ci: number, _pi: number) => {
+  const handleSelectBookmark = (ci: number, pi: number) => {
     setChapterIdx(ci);
+    setParagraphIdx(pi);
     setIsPlaying(false);
   };
 
   const handleAddBookmark = () => {
-    const para = chapter?.paragraphs[0] || '';
+    const para = paragraphs[paragraphIdx] || paragraphs[0] || '';
     const bm: Bookmark = {
       id: `${Date.now()}`,
       chapterIdx,
-      paragraphIdx: 0,
+      paragraphIdx,
       chapterTitle: chapter?.title || '',
       text: para.slice(0, 120) + (para.length > 120 ? '…' : ''),
       createdAt: Date.now(),
@@ -83,7 +109,6 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
-      {/* Background */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-64 rounded-full bg-violet-500/5 blur-[100px]" />
         <div className="absolute bottom-32 right-1/4 w-64 h-64 rounded-full bg-electric/3 blur-[100px]" />
@@ -129,7 +154,7 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
       </header>
 
       <div className="flex flex-1 relative">
-        {/* Sidebar nav */}
+        {/* Sidebar */}
         <aside
           className={`fixed left-0 top-[57px] bottom-0 z-20 w-72 bg-card border-r border-border transition-all duration-300 ease-in-out ${
             showNav ? 'translate-x-0' : '-translate-x-full'
@@ -146,7 +171,6 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
           />
         </aside>
 
-        {/* Backdrop */}
         {showNav && (
           <div
             className="fixed inset-0 z-10 bg-black/40 backdrop-blur-sm top-[57px]"
@@ -154,24 +178,32 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
           />
         )}
 
-        {/* Main text */}
         <main className="flex-1 flex flex-col">
           <div className="flex-1 max-w-3xl mx-auto w-full px-6 pt-10 pb-44 font-cormorant animate-fade-in">
             <h2 className="font-cormorant text-3xl font-light text-foreground mb-8 text-glow">
               {chapter?.title}
             </h2>
 
-            {chapter?.paragraphs.map((para, pIdx) => (
+            {paragraphs.map((para, pIdx) => (
               <p
                 key={pIdx}
-                className="mb-6 leading-relaxed text-[hsl(var(--text-body))]"
+                ref={el => { paraRefs.current[pIdx] = el; }}
+                className={`mb-6 leading-relaxed transition-all duration-300 ${
+                  isPlaying && pIdx === paragraphIdx
+                    ? 'text-foreground'
+                    : isPlaying
+                    ? 'text-muted-foreground/70'
+                    : 'text-[hsl(var(--text-body))]'
+                }`}
                 style={{ fontSize }}
               >
+                {isPlaying && pIdx === paragraphIdx && (
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-400 mr-2 mb-0.5 animate-pulse" />
+                )}
                 {para}
               </p>
             ))}
 
-            {/* Chapter nav at bottom */}
             <div className="flex items-center justify-between mt-12 pt-8 border-t border-border">
               <button
                 onClick={handlePrev}
@@ -195,15 +227,17 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
         </main>
       </div>
 
-      {/* Fixed player at bottom */}
+      {/* Player */}
       <div className="fixed bottom-0 left-0 right-0 z-30 surface-glass border-t border-border px-4 py-4">
         <div className="max-w-3xl mx-auto">
           <AudioPlayer
-            text={chapterText}
+            paragraphs={paragraphs}
+            startParagraphIdx={paragraphIdx}
             isPlaying={isPlaying}
             onPlayPause={() => setIsPlaying(p => !p)}
             onNext={handleNext}
             onPrev={handlePrev}
+            onParagraphChange={setParagraphIdx}
             speed={speed}
             onSpeedChange={setSpeed}
             fontSize={fontSize}
