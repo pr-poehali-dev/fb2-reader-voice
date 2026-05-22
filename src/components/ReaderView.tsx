@@ -1,0 +1,275 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { FB2Book } from '@/lib/fb2parser';
+import { Bookmark, saveProgress, loadProgress, loadBookmarks, saveBookmark, deleteBookmark } from '@/lib/storage';
+import AudioPlayer from './AudioPlayer';
+import ChapterNav from './ChapterNav';
+import Icon from '@/components/ui/icon';
+
+interface ReaderViewProps {
+  book: FB2Book;
+  onUnload: () => void;
+}
+
+export default function ReaderView({ book, onUnload }: ReaderViewProps) {
+  const [chapterIdx, setChapterIdx] = useState(0);
+  const [wordIdx, setWordIdx] = useState(-1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [fontSize, setFontSize] = useState(18);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState('');
+  const [showNav, setShowNav] = useState(false);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [bookmarkAdded, setBookmarkAdded] = useState(false);
+  const textRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLSpanElement>(null);
+
+  const chapter = book.chapters[chapterIdx];
+  const chapterText = chapter?.paragraphs.join(' ') || '';
+  const words = chapterText.split(/\s+/).filter(Boolean);
+
+  // Load voices
+  useEffect(() => {
+    const load = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v.length) {
+        const ruVoices = v.filter(x => x.lang.startsWith('ru'));
+        setVoices(ruVoices.length ? ruVoices : v);
+        if (!selectedVoice && ruVoices.length) setSelectedVoice(ruVoices[0].name);
+      }
+    };
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
+  }, []);
+
+  // Restore progress
+  useEffect(() => {
+    const progress = loadProgress();
+    if (progress?.bookTitle === book.title) {
+      setChapterIdx(progress.chapterIdx);
+    }
+    setBookmarks(loadBookmarks());
+  }, [book.title]);
+
+  // Save progress
+  useEffect(() => {
+    saveProgress({ bookTitle: book.title, chapterIdx, paragraphIdx: 0, savedAt: Date.now() });
+  }, [chapterIdx, book.title]);
+
+  // Auto-scroll to highlight
+  useEffect(() => {
+    highlightRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [wordIdx]);
+
+  const handleNext = useCallback(() => {
+    if (chapterIdx < book.chapters.length - 1) {
+      setChapterIdx(i => i + 1);
+      setWordIdx(-1);
+    } else {
+      setIsPlaying(false);
+    }
+  }, [chapterIdx, book.chapters.length]);
+
+  const handlePrev = useCallback(() => {
+    if (chapterIdx > 0) {
+      setChapterIdx(i => i - 1);
+      setWordIdx(-1);
+    }
+  }, [chapterIdx]);
+
+  const handleSelectChapter = (idx: number) => {
+    setChapterIdx(idx);
+    setWordIdx(-1);
+    setIsPlaying(false);
+  };
+
+  const handleSelectBookmark = (ci: number, _pi: number) => {
+    setChapterIdx(ci);
+    setWordIdx(-1);
+    setIsPlaying(false);
+  };
+
+  const handleAddBookmark = () => {
+    const para = chapter?.paragraphs[0] || '';
+    const bm: Bookmark = {
+      id: `${Date.now()}`,
+      chapterIdx,
+      paragraphIdx: 0,
+      chapterTitle: chapter?.title || '',
+      text: para.slice(0, 120) + (para.length > 120 ? '…' : ''),
+      createdAt: Date.now(),
+    };
+    saveBookmark(bm);
+    setBookmarks(loadBookmarks());
+    setBookmarkAdded(true);
+    setTimeout(() => setBookmarkAdded(false), 2000);
+  };
+
+  const handleDeleteBookmark = (id: string) => {
+    deleteBookmark(id);
+    setBookmarks(loadBookmarks());
+  };
+
+  // Render text with word highlighting
+  const renderText = () => {
+    let globalWordIdx = 0;
+    return chapter?.paragraphs.map((para, pIdx) => {
+      const paraWords = para.split(/\s+/).filter(Boolean);
+      const spans = paraWords.map((w, wIdx) => {
+        const gIdx = globalWordIdx + wIdx;
+        const isHighlighted = isPlaying && gIdx === wordIdx;
+        return (
+          <span
+            key={`${pIdx}-${wIdx}`}
+            ref={isHighlighted ? highlightRef : null}
+            className={`transition-all duration-100 ${isHighlighted ? 'word-highlight' : ''}`}
+          >
+            {w}
+            {wIdx < paraWords.length - 1 ? ' ' : ''}
+          </span>
+        );
+      });
+      globalWordIdx += paraWords.length;
+      return (
+        <p key={pIdx} className="mb-6 leading-relaxed text-[var(--text-body)]" style={{ fontSize }}>
+          {spans}
+        </p>
+      );
+    });
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background">
+      {/* Background */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-96 h-64 rounded-full bg-violet-500/5 blur-[100px]" />
+        <div className="absolute bottom-32 right-1/4 w-64 h-64 rounded-full bg-electric/3 blur-[100px]" />
+      </div>
+
+      {/* Header */}
+      <header className="sticky top-0 z-30 surface-glass border-b border-border px-4 py-3">
+        <div className="max-w-3xl mx-auto flex items-center gap-3">
+          <button
+            onClick={() => setShowNav(s => !s)}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 ${
+              showNav ? 'bg-violet-500/20 text-violet-300' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+            }`}
+          >
+            <Icon name="List" size={18} />
+          </button>
+
+          <div className="flex-1 min-w-0">
+            <p className="font-cormorant text-base font-medium text-foreground leading-tight truncate">{book.title}</p>
+            <p className="text-xs text-muted-foreground truncate">
+              {chapter?.title} · Глава {chapterIdx + 1} из {book.chapters.length}
+            </p>
+          </div>
+
+          <button
+            onClick={handleAddBookmark}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200 ${
+              bookmarkAdded ? 'bg-violet-500/30 text-violet-300' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+            }`}
+            title="Добавить закладку"
+          >
+            <Icon name={bookmarkAdded ? 'BookmarkCheck' : 'Bookmark'} size={18} />
+          </button>
+
+          <button
+            onClick={onUnload}
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-all duration-200"
+            title="Сменить книгу"
+          >
+            <Icon name="FolderOpen" size={17} />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex flex-1 relative">
+        {/* Sidebar nav */}
+        <aside
+          className={`fixed left-0 top-[57px] bottom-0 z-20 w-72 bg-card border-r border-border transition-all duration-300 ease-in-out ${
+            showNav ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <ChapterNav
+            chapters={book.chapters}
+            currentChapter={chapterIdx}
+            bookmarks={bookmarks}
+            onSelectChapter={handleSelectChapter}
+            onSelectBookmark={handleSelectBookmark}
+            onDeleteBookmark={handleDeleteBookmark}
+            onClose={() => setShowNav(false)}
+          />
+        </aside>
+
+        {/* Backdrop */}
+        {showNav && (
+          <div
+            className="fixed inset-0 z-10 bg-black/40 backdrop-blur-sm top-[57px]"
+            onClick={() => setShowNav(false)}
+          />
+        )}
+
+        {/* Main text */}
+        <main className="flex-1 flex flex-col">
+          <div
+            ref={textRef}
+            className="flex-1 max-w-3xl mx-auto w-full px-6 pt-10 pb-44 font-cormorant animate-fade-in"
+          >
+            {/* Chapter title */}
+            <h2 className="font-cormorant text-3xl font-light text-foreground mb-8 text-glow">
+              {chapter?.title}
+            </h2>
+
+            {renderText()}
+
+            {/* Chapter nav at bottom */}
+            <div className="flex items-center justify-between mt-12 pt-8 border-t border-border">
+              <button
+                onClick={handlePrev}
+                disabled={chapterIdx === 0}
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <Icon name="ChevronLeft" size={16} />
+                Предыдущая
+              </button>
+              <span className="text-xs text-muted-foreground">{chapterIdx + 1} / {book.chapters.length}</span>
+              <button
+                onClick={handleNext}
+                disabled={chapterIdx === book.chapters.length - 1}
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                Следующая
+                <Icon name="ChevronRight" size={16} />
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      {/* Fixed player at bottom */}
+      <div className="fixed bottom-0 left-0 right-0 z-30 surface-glass border-t border-border px-4 py-4">
+        <div className="max-w-3xl mx-auto">
+          <AudioPlayer
+            text={chapterText}
+            isPlaying={isPlaying}
+            onPlayPause={() => setIsPlaying(p => !p)}
+            onWordIndex={setWordIdx}
+            onPrev={handlePrev}
+            onNext={handleNext}
+            speed={speed}
+            onSpeedChange={setSpeed}
+            fontSize={fontSize}
+            onFontSizeChange={setFontSize}
+            voices={voices}
+            selectedVoice={selectedVoice}
+            onVoiceChange={setSelectedVoice}
+            canPrev={chapterIdx > 0}
+            canNext={chapterIdx < book.chapters.length - 1}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
