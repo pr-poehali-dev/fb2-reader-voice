@@ -2,91 +2,165 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '@/components/ui/icon';
 import { Slider } from '@/components/ui/slider';
 
+const SPEECHKIT_URL = 'https://functions.poehali.dev/8ae4c3c1-2ea4-4502-958f-5ea19e5ace2c';
+const MAX_CHUNK = 1000;
+
+interface YaVoice {
+  id: string;
+  name: string;
+  lang: string;
+}
+
 interface AudioPlayerProps {
   text: string;
   isPlaying: boolean;
   onPlayPause: () => void;
-  onWordIndex: (idx: number) => void;
-  onPrev: () => void;
   onNext: () => void;
+  onPrev: () => void;
   speed: number;
   onSpeedChange: (s: number) => void;
   fontSize: number;
   onFontSizeChange: (s: number) => void;
-  voices: SpeechSynthesisVoice[];
-  selectedVoice: string;
-  onVoiceChange: (name: string) => void;
   canPrev: boolean;
   canNext: boolean;
+}
+
+function splitTextToChunks(text: string, maxLen: number): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+  const chunks: string[] = [];
+  let current = '';
+  for (const s of sentences) {
+    if ((current + s).length > maxLen && current) {
+      chunks.push(current.trim());
+      current = s;
+    } else {
+      current += s;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
 }
 
 export default function AudioPlayer({
   text,
   isPlaying,
   onPlayPause,
-  onWordIndex,
-  onPrev,
   onNext,
+  onPrev,
   speed,
   onSpeedChange,
   fontSize,
   onFontSizeChange,
-  voices,
-  selectedVoice,
-  onVoiceChange,
   canPrev,
   canNext,
 }: AudioPlayerProps) {
-  const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const wordsRef = useRef<string[]>([]);
+  const [voices, setVoices] = useState<YaVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState('alena');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const chunksRef = useRef<string[]>([]);
+  const chunkIdxRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
 
-  const stop = useCallback(() => {
-    window.speechSynthesis.cancel();
+  // Load voices once
+  useEffect(() => {
+    fetch(SPEECHKIT_URL)
+      .then(r => r.json())
+      .then(d => { if (d.voices?.length) setVoices(d.voices); })
+      .catch(() => {});
   }, []);
 
-  const speak = useCallback(() => {
-    stop();
-    const words = text.split(/\s+/).filter(Boolean);
-    wordsRef.current = words;
+  const stopAudio = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+      audioRef.current = null;
+    }
+    chunkIdxRef.current = 0;
+    setLoading(false);
+  }, []);
 
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.rate = speed;
-    utter.lang = 'ru-RU';
+  const playChunk = useCallback(async (chunkIdx: number) => {
+    const chunks = chunksRef.current;
+    if (chunkIdx >= chunks.length) {
+      setLoading(false);
+      onNext();
+      return;
+    }
+    if (!isPlayingRef.current) return;
 
-    const voice = voices.find(v => v.name === selectedVoice);
-    if (voice) utter.voice = voice;
+    setLoading(true);
+    setError('');
 
-    utter.onboundary = (e) => {
-      if (e.name === 'word') {
-        const charIdx = e.charIndex;
-        const textBefore = text.slice(0, charIdx);
-        const wordIdx = textBefore.split(/\s+/).filter(Boolean).length;
-        onWordIndex(wordIdx);
-      }
-    };
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
 
-    utter.onend = () => {
-      onWordIndex(-1);
-      if (isPlaying) onNext();
-    };
+    try {
+      const resp = await fetch(SPEECHKIT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: chunks[chunkIdx], voice: selectedVoice, speed }),
+        signal: ctrl.signal,
+      });
 
-    utterRef.current = utter;
-    window.speechSynthesis.speak(utter);
-  }, [text, speed, selectedVoice, voices, onWordIndex, onNext, isPlaying, stop]);
+      const data = await resp.json();
+      if (!data.audio) throw new Error(data.error || 'Нет аудио');
 
+      const binary = atob(data.audio);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'audio/mp3' });
+      const url = URL.createObjectURL(blob);
+
+      if (!isPlayingRef.current) { URL.revokeObjectURL(url); return; }
+
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      setLoading(false);
+
+      audio.playbackRate = 1;
+      await audio.play();
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        chunkIdxRef.current = chunkIdx + 1;
+        if (isPlayingRef.current) playChunk(chunkIdx + 1);
+      };
+    } catch (e: unknown) {
+      if ((e as Error).name === 'AbortError') return;
+      setError('Ошибка синтеза. Проверь ключ Yandex.');
+      setLoading(false);
+    }
+  }, [selectedVoice, speed, onNext]);
+
+  // Start / stop based on isPlaying
   useEffect(() => {
     if (isPlaying) {
-      speak();
+      chunksRef.current = splitTextToChunks(text, MAX_CHUNK);
+      chunkIdxRef.current = 0;
+      stopAudio();
+      setTimeout(() => playChunk(0), 50);
     } else {
-      stop();
+      stopAudio();
     }
-    return () => { stop(); };
+    return () => { stopAudio(); };
   }, [isPlaying, text]);
 
+  // Re-synthesize if voice/speed changed while playing
   useEffect(() => {
-    if (isPlaying) speak();
-  }, [speed, selectedVoice]);
+    if (isPlaying) {
+      stopAudio();
+      chunksRef.current = splitTextToChunks(text, MAX_CHUNK);
+      chunkIdxRef.current = 0;
+      setTimeout(() => playChunk(0), 50);
+    }
+  }, [selectedVoice, speed]);
 
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
@@ -98,15 +172,14 @@ export default function AudioPlayer({
           <div className="space-y-5">
             {/* Voice */}
             <div>
-              <label className="text-xs text-muted-foreground uppercase tracking-widest block mb-2">Голос</label>
+              <label className="text-xs text-muted-foreground uppercase tracking-widest block mb-2">Голос (Yandex SpeechKit)</label>
               <select
                 value={selectedVoice}
-                onChange={e => onVoiceChange(e.target.value)}
+                onChange={e => setSelectedVoice(e.target.value)}
                 className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-violet-500/30"
               >
-                {voices.length === 0 && <option value="">Системный голос</option>}
                 {voices.map(v => (
-                  <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                  <option key={v.id} value={v.id}>{v.name}</option>
                 ))}
               </select>
             </div>
@@ -153,9 +226,16 @@ export default function AudioPlayer({
         </div>
       )}
 
+      {/* Error */}
+      {error && (
+        <div className="absolute bottom-full left-0 right-0 mb-2 flex items-center gap-2 text-red-400 text-xs">
+          <Icon name="AlertCircle" size={12} />
+          {error}
+        </div>
+      )}
+
       {/* Player bar */}
       <div className="flex items-center gap-3">
-        {/* Prev chapter */}
         <button
           onClick={onPrev}
           disabled={!canPrev}
@@ -164,15 +244,16 @@ export default function AudioPlayer({
           <Icon name="SkipBack" size={18} />
         </button>
 
-        {/* Play/Pause */}
         <button
           onClick={onPlayPause}
           className="w-14 h-14 rounded-2xl bg-violet-500 hover:bg-violet-400 flex items-center justify-center transition-all duration-200 active:scale-95 box-glow-strong shadow-lg"
         >
-          <Icon name={isPlaying ? 'Pause' : 'Play'} size={24} className="text-white" />
+          {loading
+            ? <Icon name="Loader2" size={22} className="text-white animate-spin" />
+            : <Icon name={isPlaying ? 'Pause' : 'Play'} size={24} className="text-white" />
+          }
         </button>
 
-        {/* Next chapter */}
         <button
           onClick={onNext}
           disabled={!canNext}
@@ -181,8 +262,7 @@ export default function AudioPlayer({
           <Icon name="SkipForward" size={18} />
         </button>
 
-        {/* Wave animation */}
-        {isPlaying && (
+        {isPlaying && !loading && (
           <div className="flex items-end gap-0.5 h-6 ml-1">
             {[...Array(5)].map((_, i) => (
               <span key={i} className="wave-bar h-full" />
@@ -190,9 +270,12 @@ export default function AudioPlayer({
           </div>
         )}
 
+        {loading && (
+          <span className="text-xs text-muted-foreground ml-1 animate-pulse">Синтез...</span>
+        )}
+
         <div className="flex-1" />
 
-        {/* Settings */}
         <button
           onClick={() => setShowSettings(s => !s)}
           className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${

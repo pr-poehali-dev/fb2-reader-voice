@@ -1,0 +1,21 @@
+{
+  "tests": [
+    {
+      "name": "GET voices list",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 200,
+      "expectedBody": {"voices": [{"id": "alena", "lang": "ru"}]},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "POST synthesize text",
+      "method": "POST",
+      "path": "/",
+      "body": {"text": "Привет, это тест синтеза речи.", "voice": "alena", "speed": 1.0},
+      "expectedStatus": 200,
+      "expectedBody": {"format": "mp3"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

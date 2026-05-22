@@ -12,35 +12,15 @@ interface ReaderViewProps {
 
 export default function ReaderView({ book, onUnload }: ReaderViewProps) {
   const [chapterIdx, setChapterIdx] = useState(0);
-  const [wordIdx, setWordIdx] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [fontSize, setFontSize] = useState(18);
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selectedVoice, setSelectedVoice] = useState('');
   const [showNav, setShowNav] = useState(false);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [bookmarkAdded, setBookmarkAdded] = useState(false);
-  const textRef = useRef<HTMLDivElement>(null);
-  const highlightRef = useRef<HTMLSpanElement>(null);
 
   const chapter = book.chapters[chapterIdx];
   const chapterText = chapter?.paragraphs.join(' ') || '';
-  const words = chapterText.split(/\s+/).filter(Boolean);
-
-  // Load voices
-  useEffect(() => {
-    const load = () => {
-      const v = window.speechSynthesis.getVoices();
-      if (v.length) {
-        const ruVoices = v.filter(x => x.lang.startsWith('ru'));
-        setVoices(ruVoices.length ? ruVoices : v);
-        if (!selectedVoice && ruVoices.length) setSelectedVoice(ruVoices[0].name);
-      }
-    };
-    load();
-    window.speechSynthesis.onvoiceschanged = load;
-  }, []);
 
   // Restore progress
   useEffect(() => {
@@ -56,15 +36,9 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
     saveProgress({ bookTitle: book.title, chapterIdx, paragraphIdx: 0, savedAt: Date.now() });
   }, [chapterIdx, book.title]);
 
-  // Auto-scroll to highlight
-  useEffect(() => {
-    highlightRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [wordIdx]);
-
   const handleNext = useCallback(() => {
     if (chapterIdx < book.chapters.length - 1) {
       setChapterIdx(i => i + 1);
-      setWordIdx(-1);
     } else {
       setIsPlaying(false);
     }
@@ -73,19 +47,16 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
   const handlePrev = useCallback(() => {
     if (chapterIdx > 0) {
       setChapterIdx(i => i - 1);
-      setWordIdx(-1);
     }
   }, [chapterIdx]);
 
   const handleSelectChapter = (idx: number) => {
     setChapterIdx(idx);
-    setWordIdx(-1);
     setIsPlaying(false);
   };
 
   const handleSelectBookmark = (ci: number, _pi: number) => {
     setChapterIdx(ci);
-    setWordIdx(-1);
     setIsPlaying(false);
   };
 
@@ -108,34 +79,6 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
   const handleDeleteBookmark = (id: string) => {
     deleteBookmark(id);
     setBookmarks(loadBookmarks());
-  };
-
-  // Render text with word highlighting
-  const renderText = () => {
-    let globalWordIdx = 0;
-    return chapter?.paragraphs.map((para, pIdx) => {
-      const paraWords = para.split(/\s+/).filter(Boolean);
-      const spans = paraWords.map((w, wIdx) => {
-        const gIdx = globalWordIdx + wIdx;
-        const isHighlighted = isPlaying && gIdx === wordIdx;
-        return (
-          <span
-            key={`${pIdx}-${wIdx}`}
-            ref={isHighlighted ? highlightRef : null}
-            className={`transition-all duration-100 ${isHighlighted ? 'word-highlight' : ''}`}
-          >
-            {w}
-            {wIdx < paraWords.length - 1 ? ' ' : ''}
-          </span>
-        );
-      });
-      globalWordIdx += paraWords.length;
-      return (
-        <p key={pIdx} className="mb-6 leading-relaxed text-[var(--text-body)]" style={{ fontSize }}>
-          {spans}
-        </p>
-      );
-    });
   };
 
   return (
@@ -213,16 +156,20 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
 
         {/* Main text */}
         <main className="flex-1 flex flex-col">
-          <div
-            ref={textRef}
-            className="flex-1 max-w-3xl mx-auto w-full px-6 pt-10 pb-44 font-cormorant animate-fade-in"
-          >
-            {/* Chapter title */}
+          <div className="flex-1 max-w-3xl mx-auto w-full px-6 pt-10 pb-44 font-cormorant animate-fade-in">
             <h2 className="font-cormorant text-3xl font-light text-foreground mb-8 text-glow">
               {chapter?.title}
             </h2>
 
-            {renderText()}
+            {chapter?.paragraphs.map((para, pIdx) => (
+              <p
+                key={pIdx}
+                className="mb-6 leading-relaxed text-[hsl(var(--text-body))]"
+                style={{ fontSize }}
+              >
+                {para}
+              </p>
+            ))}
 
             {/* Chapter nav at bottom */}
             <div className="flex items-center justify-between mt-12 pt-8 border-t border-border">
@@ -255,16 +202,12 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
             text={chapterText}
             isPlaying={isPlaying}
             onPlayPause={() => setIsPlaying(p => !p)}
-            onWordIndex={setWordIdx}
-            onPrev={handlePrev}
             onNext={handleNext}
+            onPrev={handlePrev}
             speed={speed}
             onSpeedChange={setSpeed}
             fontSize={fontSize}
             onFontSizeChange={setFontSize}
-            voices={voices}
-            selectedVoice={selectedVoice}
-            onVoiceChange={setSelectedVoice}
             canPrev={chapterIdx > 0}
             canNext={chapterIdx < book.chapters.length - 1}
           />
