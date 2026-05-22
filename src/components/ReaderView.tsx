@@ -188,12 +188,16 @@ export default function ReaderView({ book, onUnload }: ReaderViewProps) {
               <p
                 key={pIdx}
                 ref={el => { paraRefs.current[pIdx] = el; }}
-                className={`mb-6 leading-relaxed transition-all duration-300 ${
+                onClick={() => {
+                  setParagraphIdx(pIdx);
+                  setIsPlaying(true);
+                }}
+                className={`mb-6 leading-relaxed transition-all duration-300 cursor-pointer rounded-lg px-2 -mx-2 ${
                   isPlaying && pIdx === paragraphIdx
                     ? 'text-foreground'
                     : isPlaying
-                    ? 'text-muted-foreground/70'
-                    : 'text-[hsl(var(--text-body))]'
+                    ? 'text-muted-foreground/70 hover:text-foreground/80'
+                    : 'text-[hsl(var(--text-body))] hover:text-foreground'
                 }`}
                 style={{ fontSize }}
               >

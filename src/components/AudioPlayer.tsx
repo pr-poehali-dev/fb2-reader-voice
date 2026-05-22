@@ -146,14 +146,22 @@ export default function AudioPlayer({
     return () => { stopAudio(); };
   }, [isPlaying]);
 
-  // New chapter loaded — reset paragraph
+  // New chapter — reset paragraph index
   useEffect(() => {
-    paraIdxRef.current = startParagraphIdx;
+    paraIdxRef.current = 0;
     if (isPlaying) {
       stopAudio();
-      setTimeout(() => playFrom(startParagraphIdx), 50);
+      setTimeout(() => playFrom(0), 50);
     }
-  }, [paragraphs, startParagraphIdx]);
+  }, [paragraphs]);
+
+  // External paragraph jump (e.g. click on paragraph in reader)
+  useEffect(() => {
+    if (paraIdxRef.current === startParagraphIdx) return;
+    paraIdxRef.current = startParagraphIdx;
+    stopAudio();
+    setTimeout(() => playFrom(startParagraphIdx), 50);
+  }, [startParagraphIdx]);
 
   // Re-synthesize if voice/speed changed while playing
   useEffect(() => {
